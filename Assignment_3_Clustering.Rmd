@@ -1,0 +1,2338 @@
+---
+title: "Assignment 3 Code"
+author: "Nikita","Archana","Ritu"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+install.packages("clusterSim")
+library(clusterSim)
+install.packages("clValid")
+library(clValid)
+install.packages("clv")
+library(clv)
+install.packages("cluster")
+library(cluster)
+install.packages("factoextra")
+library(factoextra)
+```
+
+```{r cars}
+library(tidyverse)
+
+library(readxl)
+bsData <- read_excel("C:/Users/nikit/Desktop/IDS_572/Assignment3/Assgt3_BathSoap_Data.xls", sheet = "DM_Sheet")
+
+
+#the data read in may contain empty rows, columns, so remove these
+bsData<-bsData[1:600, 1:46]
+
+#change the colNames which contain punctuation, space to _ (like affluence index,etc)
+names(bsData) <- gsub("[[:punct:]]|\\s", "_", names(bsData))
+
+#The data with '%' in values are read in as 'chr' type - change these to numeric
+bsData[20:46]<-lapply(bsData[20:46],function(x)  as.numeric(sub("%", "e-2", x)))
+
+#rename the data
+bsd<- bsData
+
+#for brLoyalty, calculate maxBr as max of purchase by different major brand (excl others)
+bsd<-bsd %>% rowwise() %>%  mutate(maxBr=max(Br__Cd__57__144, Br__Cd__55, Br__Cd__272, Br__Cd__286, Br__Cd__24, Br__Cd__481, Br__Cd__352, Br__Cd__5))
+
+```
+
+#Q2a
+Data exploration, cleaning
+```{r}
+
+#Examine the data - can all attributes be considered as 'numeric'
+summary(as.factor(bsd$FEH))
+
+#convert this to dummies, since the values are not ordinal, and remove the '0' level dummy
+bsd<-bsd %>% mutate(fehDummy=1) %>% pivot_wider(names_from = FEH, values_from = fehDummy, names_prefix = "FEH_", values_fill = list(fehDummy=0))
+
+bsd<- bsd %>% select(-FEH_0)  # can append this to the last line too
+
+#explore MT
+summary(as.factor(bsd$MT))
+#keep levels 0, 4, 5, 10, 17 as dummies, with 0 in the dummies indicating 'other'
+bsd<- bsd %>% mutate(MT=if_else(MT %in% c(0, 4, 5, 10, 17), MT, -1))
+bsd<-bsd %>% mutate(mtDummy=1) %>% pivot_wider(names_from = MT, values_from = mtDummy, names_prefix = "MT_", values_fill = list(mtDummy=0)) 
+bsd<- bsd %>% select(- `MT_0`)
+#rename MT_-1 to MT_0
+#MT_0 will contain all other languages 
+bsd <- bsd %>% rename("MT_0" = "MT_-1")
+
+#similarly for CHILD, leave out the level '5' for unknown
+bsd<-bsd %>% mutate(mtChild=1) %>% pivot_wider(names_from = CHILD, values_from = mtChild, names_prefix = "CHILD_", values_fill = list(mtChild=0)) %>% select(- CHILD_5) 
+
+```
+
+# Exploration for SEC, EDU, SEX
+```{r}
+#SEC
+summary(as.factor(bsd$SEC))
+#convert this to dummies, since the values are not ordinal
+bsd<-bsd %>% mutate(fehDummy=1) %>% pivot_wider(names_from = SEC, values_from = fehDummy, names_prefix = "SEC_", values_fill = list(fehDummy=0))
+
+#SEX
+summary(as.factor(bsd$SEX))
+#convert this to dummies, since the values are not ordinal
+bsd<-bsd %>% mutate(fehDummy=1) %>% pivot_wider(names_from = SEX, values_from = fehDummy, names_prefix = "SEX_", values_fill = list(fehDummy=0))
+bsd<- bsd %>% select(-SEX_0)
+
+#EDU
+summary(as.factor(bsd$EDU))
+#New Categories
+# 1 -> Illiterate, 2 -> Literate, but no formal schooling
+# 3 -> Mid School(3+4), 4(which was 5 earlier) -> High School
+# 5 -> College (6 to 9)
+# delete 0
+bsd <- bsd %>% mutate(EDU=replace(EDU, EDU==4, 3))  %>% mutate(EDU=replace(EDU, EDU==5, 4)) %>% mutate(EDU=replace(EDU, EDU > 5 , 5))
+summary(as.factor(bsd$EDU))
+#convert this to dummies, since the values are not ordinal
+bsd<-bsd %>% mutate(fehDummy=1) %>% pivot_wider(names_from = EDU, values_from = fehDummy, names_prefix = "EDU_", values_fill = list(fehDummy=0))
+#Remove the '0' level dummy
+bsd<- bsd %>% select(-EDU_0)
+#rename the columns
+bsd <- bsd %>% rename("EDU_3to4" = "EDU_3")
+bsd <- bsd %>% rename("EDU_6to9" = "EDU_5")
+bsd <- bsd %>% rename("EDU_5" = "EDU_4")
+
+#Examine Age
+summary(as.factor(bsd$AGE))
+#Convert this to dummies, since the values are not ordinal
+bsd<-bsd %>% mutate(fehDummy=1) %>% pivot_wider(names_from = AGE, values_from = fehDummy, names_prefix = "AGE_", values_fill = list(fehDummy=0))
+```
+
+# ####Answer 2 (a) ######### #
+
+#assign bsd to x and set seed
+```{r}
+x<- bsd
+set.seed(1234)
+library(factoextra)
+```
+
+```{r}
+#clustering on  purchase behavior varables
+PURCHASE_BEHAVIOR <- c('No__of_Brands', 'Brand_Runs', 'Total_Volume', 'No__of__Trans', 'Value', 'Trans___Brand_Runs', 'Vol_Tran', 'Avg__Price', 'maxBr', 'Others_999')
+
+xpb<-x %>% select(PURCHASE_BEHAVIOR) %>% scale() 
+
+#how many clusters is best
+a <- fviz_nbclust(xpb, kmeans, method = "wss")
+b <- fviz_nbclust(xpb, kmeans, method = "silhouette")
+
+#kmeans model
+kmClus_pb<- xpb %>%kmeans(centers=2, nstart=25)
+kmClus_pb
+
+#visualize the cluster - based on variables used for clustering
+c <- fviz_cluster(kmClus_pb, data=x %>% select(PURCHASE_BEHAVIOR) %>% scale())
+
+#add the cluster variable to the data and check the cluster descriptions in terms of broader set of variables
+x <- x %>% mutate(clusKM=kmClus_pb$cluster)
+
+z <- x %>% group_by(clusKM) %>% summarise_at(c(
+'SEC_1', 'SEC_2', 'SEC_3', 'SEC_4', 
+'HS', 
+'SEX_1', 'SEX_2', 
+'EDU_1', 'EDU_2', 'EDU_3to4', 'EDU_5', 'EDU_6to9', 
+'Affluence_Index',
+'AGE_1', 'AGE_2', 'AGE_3', 'AGE_4', 
+'CHILD_1', 'CHILD_2', 'CHILD_3', 'CHILD_4', 
+'maxBr', 
+'No__of_Brands', 
+'No__of__Trans', 
+'Brand_Runs', 
+'Total_Volume', 
+'Value', 
+'Trans___Brand_Runs'), mean) 
+
+View(z)
+write.csv(z, "Model 1.csv")
+
+#db and dunn index for k means models
+library(clusterSim)
+library(clValid)
+print(index.DB(xpb, kmClus_pb$cluster, centrotypes = "centroids"))
+print(dunn(clusters = kmClus_pb$cluster, Data = xpb))
+```
+
+# ####### Answer 2 (b) ############
+
+Exploration for basis of purchase variables 
+```{r}
+#Explore Proposition Values
+ggplot(bsd, aes(x=PropCat_5)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_6)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_7)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_8)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_9)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_10)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_11)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_12)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_13)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_14)) + 
+  geom_histogram() + stat_bin(bins = 60)
+ggplot(bsd, aes(x=PropCat_15)) + 
+  geom_histogram() + stat_bin(bins = 60)
+#from the histograms above, we can see that most the values
+#for PropCat_10 to PropCat_15 are close to zero
+
+summary(bsd)
+```
+
+
+#kMeans clustering for basis for purchase
+```{r}
+set.seed(1234)
+BASIS_FOR_PURCHASE <-c('Pr_Cat_1','Pr_Cat_2','Pr_Cat_3','Pr_Cat_4','PropCat_5', 'PropCat_6', 'PropCat_7', 'PropCat_8','PropCat_14','Pur_Vol_No_Promo____', 'Pur_Vol_Promo_6__','Pur_Vol_Other_Promo__')
+x <- bsd
+xbfp<-x %>% select(BASIS_FOR_PURCHASE) %>% scale()
+
+#how many clusters is best
+fviz_nbclust(xbfp, kmeans, method = "wss")
+fviz_nbclust(xbfp, kmeans, method = "silhouette")
+
+#k=2
+kmk2_xbfp1<- xbfp %>%kmeans(centers=2, nstart=25, iter.max = 10)
+kmk2_xbfp2<- xbfp %>%kmeans(centers=2, nstart=100, iter.max = 10)
+kmk2_xbfp3<- xbfp %>%kmeans(centers=2, nstart=500, iter.max = 10)
+kmk2_xbfp4<- xbfp %>%kmeans(centers=2, nstart=500, iter.max = 25)
+
+kmk2_xbfp4$centers
+kmk2_xbfp4$size
+kmk2_xbfp4$withinss
+kmk2_xbfp4$tot.withinss
+kmk2_xbfp4$iter
+kmk2_xbfp4$betweenss
+
+print(index.DB(xbfp, kmk2_xbfp4$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk2_xbfp4$cluster, Data = xbfp))
+
+#visualize the cluster - based on variables used for clustering
+fviz_cluster(kmk2_xbfp2, data=x %>% select(BASIS_FOR_PURCHASE))
+
+#k=3
+kmk3_xbfp1<- xbfp %>%kmeans(centers=3, nstart=25, iter.max = 10)
+kmk3_xbfp2<- xbfp %>%kmeans(centers=3, nstart=100, iter.max = 10)
+kmk3_xbfp3<- xbfp %>%kmeans(centers=3, nstart=500, iter.max = 10)
+kmk3_xbfp4<- xbfp %>%kmeans(centers=3, nstart=500, iter.max = 100)
+kmk3_xbfp1$size
+kmk3_xbfp4$centers
+kmk3_xbfp4$betweenss
+kmk3_xbfp4$withinss
+kmk3_xbfp4$tot.withinss
+kmk3_xbfp4$iter
+
+#k3 - 1
+print(index.DB(xbfp, kmk3_xbfp1$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk3_xbfp1$cluster, Data = xbfp))
+#k3 - 2
+print(index.DB(xbfp, kmk3_xbfp2$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk3_xbfp2$cluster, Data = xbfp))
+#k3 - 3
+print(index.DB(xbfp, kmk3_xbfp3$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk3_xbfp3$cluster, Data = xbfp))
+#k3 - 4
+print(index.DB(xbfp, kmk3_xbfp4$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk3_xbfp4$cluster, Data = xbfp))
+
+#visualize the cluster - based on variables used for clustering
+fviz_cluster(kmk3_xbfp1, data=x %>% select(BASIS_FOR_PURCHASE))
+fviz_cluster(kmk3_xbfp2, data=x %>% select(BASIS_FOR_PURCHASE))
+fviz_cluster(kmk3_xbfp3, data=x %>% select(BASIS_FOR_PURCHASE))
+fviz_cluster(kmk3_xbfp4, data=x %>% select(BASIS_FOR_PURCHASE))
+
+#k=4
+kmk4_xbfp1<- xbfp %>%kmeans(centers=4, nstart=25, iter.max = 10)
+kmk4_xbfp2<- xbfp %>%kmeans(centers=4, nstart=100, iter.max = 10)
+kmk4_xbfp3<- xbfp %>%kmeans(centers=4, nstart=500, iter.max = 10)
+kmk4_xbfp4<- xbfp %>%kmeans(centers=4, nstart=500, iter.max = 100)
+kmk4_xbfp1$size
+kmk4_xbfp2$size
+kmk4_xbfp3$size
+kmk4_xbfp4$size
+
+kmk4_xbfp3$centers
+kmk4_xbfp3$betweenss
+kmk4_xbfp3$withinss
+kmk4_xbfp3$tot.withinss
+kmk4_xbfp3$iter
+
+#k4 - 1
+print(index.DB(xbfp, kmk4_xbfp1$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk4_xbfp1$cluster, Data = xbfp))
+#k4 - 2
+print(index.DB(xbfp, kmk4_xbfp2$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk4_xbfp2$cluster, Data = xbfp))
+#k4 - 3
+print(index.DB(xbfp, kmk4_xbfp3$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk4_xbfp3$cluster, Data = xbfp))
+#k4 - 4
+print(index.DB(xbfp, kmk4_xbfp4$cluster, centrotypes = "centroids")$DB)
+print(dunn(clusters = kmk4_xbfp4$cluster, Data = xbfp))
+
+#visualize the cluster - based on variables used for clustering
+fviz_cluster(kmk4_xbfp1, data=x %>% select(BASIS_FOR_PURCHASE))
+fviz_cluster(kmk4_xbfp2, data=x %>% select(BASIS_FOR_PURCHASE))
+fviz_cluster(kmk4_xbfp3, data=x %>% select(BASIS_FOR_PURCHASE))
+fviz_cluster(kmk4_xbfp4, data=x %>% select(BASIS_FOR_PURCHASE))
+
+#k = 2 is the best model
+#add the cluster variable to the data and check the cluster descriptions in terms of broader set of variables
+x <- x %>% mutate(clusKM=kmk2_xbfp4$cluster)
+
+x %>% group_by(clusKM) %>% summarise_at(c('SEC_1','SEC_2','SEC_3','SEC_4','HS','SEX_1','SEX_2','EDU_1','EDU_2','EDU_3to4','EDU_5','EDU_6to9','Affluence_Index',
+'AGE_1','AGE_2','AGE_3','AGE_4','CHILD_1','CHILD_2','CHILD_3','CHILD_4','Pr_Cat_1','Pr_Cat_2','Pr_Cat_3','Pr_Cat_4','PropCat_5', 'PropCat_6', 'PropCat_7', 'PropCat_8','PropCat_14','Pur_Vol_No_Promo____', 'Pur_Vol_Promo_6__','Pur_Vol_Other_Promo__'), mean) %>% view()
+
+```
+#### end of Q2b ####
+
+# #####################################################################
+#                         Answer 2 (c)
+# #####################################################################
+# preparing 3 data sets for -  purchase behavior, basis for purchase and both.
+```{r}
+
+library(factoextra)
+
+#Purchase behavior varables
+PURCHASE_BEHAVIOR <- c('No__of_Brands', 'Brand_Runs', 'Total_Volume', 'No__of__Trans', 'Value', 'Trans___Brand_Runs', 'Vol_Tran', 'Avg__Price', 'maxBr', 'Others_999')
+
+#Basis for purchase variables
+summary(bsd)
+
+#Proposition Categories- Provides us Percent of volume purchased under the product proposition. Only proposition categories - 5, 6, 7, 8 and 14 are considered as others have distribution tending to zeroes.
+
+BASIS_FOR_PURCHASE <- c('Pr_Cat_1', 'Pr_Cat_2', 'Pr_Cat_3', 'Pr_Cat_4', 'Pur_Vol_No_Promo____', 'Pur_Vol_Promo_6__', 'Pur_Vol_Other_Promo__', 'PropCat_5', 'PropCat_6', 'PropCat_7', 'PropCat_8', 'PropCat_14' )
+
+#Create a scaled dataset for clustering, and use this
+xpb <- bsd %>% select(PURCHASE_BEHAVIOR) %>% scale()
+xbfp <- bsd %>% select(BASIS_FOR_PURCHASE) %>% scale()
+xboth<- bsd %>% select(PURCHASE_BEHAVIOR, BASIS_FOR_PURCHASE) %>% scale() 
+
+# Perform k-means clustering on a data matrix
+class(xboth)
+```
+
+
+
+# 2c - k means clustering
+
+```{r}
+
+#nstart = if centers is a number, how many random sets should be chosen? Can also change the iterations
+set.seed(1234)
+
+#k=4
+kmClus_both1 <- kmeans(xboth, centers=4, nstart=25, iter.max = 20)
+#visualize the cluster - based on variables used for clustering
+fviz_cluster(kmClus_both1, data=xboth)
+
+print(index.DB(xboth, kmClus_both1$cluster,centrotypes="centroids"))
+print(dunn(clusters = kmClus_both1$cluster, Data=xboth))
+
+
+kmClus_both2 <- kmeans(xboth, centers=4, nstart=50, iter.max = 50)
+fviz_cluster(kmClus_both2, data=xboth)
+print(index.DB(xboth, kmClus_both2$cluster,centrotypes="centroids"))
+print(dunn(clusters = kmClus_both2$cluster, Data=xboth))
+
+
+#k=5
+kmClus_both3 <- kmeans(xboth, centers=5, nstart=25, iter.max = 20)
+fviz_cluster(kmClus_both3, data=xboth)
+print(index.DB(xboth, kmClus_both3$cluster,centrotypes="centroids"))
+print(dunn(clusters = kmClus_both3$cluster, Data=xboth))
+
+kmClus_both4 <- kmeans(xboth, centers=5, nstart=50, iter.max = 50)
+fviz_cluster(kmClus_both4, data=xboth)
+print(index.DB(xboth, kmClus_both4$cluster,centrotypes="centroids"))
+print(dunn(clusters = kmClus_both4$cluster, Data=xboth))
+
+
+#k=6 - best
+kmClus_both5 <- kmeans(xboth, centers=6, nstart=25, iter.max = 20)
+fviz_cluster(kmClus_both5, data=xboth)
+attributes(kmClus_both5)
+print(index.DB(xboth, kmClus_both5$cluster,centrotypes="centroids"))
+print(dunn(clusters = kmClus_both5$cluster, Data=xboth))
+
+
+kmClus_both6 <- kmeans(xboth, centers=6, nstart=50, iter.max = 50)
+fviz_cluster(kmClus_both6, data=xboth)
+print(index.DB(xboth, kmClus_both6$cluster,centrotypes="centroids"))
+print(dunn(clusters = kmClus_both6$cluster, Data=xboth))
+
+
+#k=7
+kmClus_both7 <- kmeans(xboth, centers=7, nstart=25, iter.max = 20)
+fviz_cluster(kmClus_both7, data=xboth)
+print(index.DB(xboth, kmClus_both7$cluster,centrotypes="centroids"))
+print(dunn(clusters = kmClus_both7$cluster, Data=xboth))
+
+kmClus_both8 <- kmeans(xboth, centers=7, nstart=50, iter.max = 50)
+fviz_cluster(kmClus_both8, data=xboth)
+print(index.DB(xboth, kmClus_both8$cluster,centrotypes="centroids"))
+print(dunn(clusters = kmClus_both8$cluster, Data=xboth))
+
+
+#how many clusters "k" is best?
+
+#elbow method
+fviz_nbclust(xboth, kmeans, method = "wss") + geom_vline(xintercept = 6, linetype = 2)+
+  labs(subtitle = "Elbow method")
+
+#silhouette method
+fviz_nbclust(xboth, kmeans, method = "silhouette") + labs(subtitle = "Silhouette method")
+
+#by both the methods, sub optimal value of K = 6
+
+```
+###end of Q2c######
+
+
+# ###Answer 3 - Hierarchical Clustering ###
+#Q3
+#Hierarchical clustering with hclust and agnes
+
+#Basis of Purchase
+#clustering on  basis of purchase varables
+```{r}
+set.seed(1234)
+BASIS_FOR_PURCHASE <- c('Pr_Cat_1','Pr_Cat_2','Pr_Cat_3','Pr_Cat_4','PropCat_5', 'PropCat_6', 'PropCat_7', 'PropCat_8','PropCat_14','Pur_Vol_No_Promo____', 'Pur_Vol_Promo_6__','Pur_Vol_Other_Promo__')
+x <- bsd
+xbfp<-x %>% select(BASIS_FOR_PURCHASE) %>% scale() 
+```
+
+#Dissimilarity matrix - Euclidean and Manhattan
+```{r}
+#Dissimilarity matrix from euclidean
+xdist_euc <- dist(xbfp, method = "euclidean")
+#Dissimilarity matrix from manhattan
+xdist_man <- dist(xbfp, method = "manhattan")
+```
+
+#variable list -> basis for purchase
+#clustering -> HCLUST
+#distance -> Euclidean
+#Method -> Complete,Average,Single,Ward.d,Ward.d2
+```{r}
+#basis of purchase
+#four different methods
+HCE_Complete <- hclust(xdist_euc, method = "complete" )
+HCE_Average <- hclust(xdist_euc, method = "average" )
+HCE_Single <- hclust(xdist_euc, method = "single" )
+HCE_Ward <- hclust(xdist_euc, method = "ward.D" )
+HCE_WardD2 <- hclust(xdist_euc, method = "ward.D2" )
+
+#dendrograms for different methods for heirarchical clustering
+#euclidean dissimilarity matrix
+plot(HCE_Complete, cex=0.3, hang=-3, main="hclust-complete")
+plot(HCE_Average, cex=0.3, hang=-3, main="hclust-average")
+plot(HCE_Single, cex=0.3, hang=-3, main="hclust-single")
+plot(HCE_Ward, cex=0.3, hang=-3, main="hclust-ward")
+plot(HCE_WardD2, cex=0.3, hang=-3, main="hclust-ward.D2")
+
+#Method = Complete
+#cutting tree based on clusters needed
+cut1_HC_c <- cutree(HCE_Complete, k = 2)
+table(cut1_HC_c)
+cut2_HC_c <- cutree(HCE_Complete, k = 3)
+table(cut2_HC_c)
+cut3_HC_c <- cutree(HCE_Complete, k = 4)
+table(cut3_HC_c)
+cut4_HC_c <- cutree(HCE_Complete, k = 5)
+table(cut4_HC_c)
+#plot clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_c ), main="hclust-euclidean-complete cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_c ), main="hclust-euclidean-complete cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_c ), main="hclust-euclidean-complete cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_c ), main="hclust-euclidean-complete cluster k=5")
+
+
+#Method = Average
+#cutting tree based on clusters needed
+cut1_HC_a <- cutree(HCE_Average, k = 2)
+table(cut1_HC_a)
+cut2_HC_a <- cutree(HCE_Average, k = 3)
+table(cut2_HC_a)
+cut3_HC_a <- cutree(HCE_Average, k = 4)
+table(cut3_HC_a)
+cut4_HC_a <- cutree(HCE_Average, k = 5)
+table(cut4_HC_a)
+#plot clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_a), main="hclust-euclidean-average cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_a ), main="hclust-euclidean-average cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_a ), main="hclust-euclidean-average cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_a ), main="hclust-euclidean-average cluster k=5")
+
+
+#Method = Single
+#cutting tree based on clusters needed
+cut1_HC_e <- cutree(HCE_Single, k = 2)
+table(cut1_HC_e)
+cut2_HC_e <- cutree(HCE_Single, k = 3)
+table(cut2_HC_e)
+cut3_HC_e <- cutree(HCE_Single, k = 4)
+table(cut3_HC_e)
+cut4_HC_e <- cutree(HCE_Single, k = 5)
+table(cut4_HC_e)
+#plot clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_e ), main="hclust-euclidean-single cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_e ), main="hclust-euclidean-single cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_e ), main="hclust-euclidean-single cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_e ), main="hclust-euclidean-single cluster k=5")
+
+
+#Method = Ward
+#cutting tree based on clusters needed
+cut1_HC_w <- cutree(HCE_Ward, k = 2)
+table(cut1_HC_w)
+cut2_HC_w <- cutree(HCE_Ward, k = 3)
+table(cut2_HC_w)
+cut3_HC_w <- cutree(HCE_Ward, k = 4)
+table(cut3_HC_w)
+cut4_HC_w <- cutree(HCE_Ward, k = 5)
+table(cut4_HC_w)
+#visualizing clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_w ), main="hclust-ward cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_w ), main="hclust-ward cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_w ), main="hclust-ward cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_w ), main="hclust-ward cluster k=5")
+
+#Method = Ward.D2
+#cutting tree based on clusters needed
+cut1_HC_wd2 <- cutree(HCE_WardD2, k = 2)
+table(cut1_HC_wd2)
+cut2_HC_wd2 <- cutree(HCE_WardD2, k = 3)
+table(cut2_HC_wd2)
+cut3_HC_wd2 <- cutree(HCE_WardD2, k = 4)
+table(cut3_HC_wd2)
+cut4_HC_wd2 <- cutree(HCE_WardD2, k = 5)
+table(cut4_HC_wd2)
+#visualizing clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_wd2 ), main="hclust-ward cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_wd2 ), main="hclust-ward cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_wd2 ), main="hclust-ward cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_wd2 ), main="hclust-ward cluster k=5")
+```
+
+#evaluate above clusters by DB Index and Dunn Index
+```{r}
+#evaulate DB index for all clusters
+#change method inside for loop and run for all five methods
+library(clusterSim)
+#xdist_euc <- dist(xbfp, method="euclidean")
+#nc - number_of_clusters
+min_nc=2
+max_nc=5
+res <- array(0, c(max_nc-min_nc+1, 2))
+res[,1] <- min_nc:max_nc
+clusters <- NULL
+for (nc in min_nc:max_nc)
+{
+hc <- hclust(xdist_euc, method= "ward.D2")
+cl2 <- cutree(hc, k=nc)
+res[nc-min_nc+1, 2] <- DB <- index.DB(xdist_euc, cl2, centrotypes="centroids")$DB
+print(paste("DB index for k = ",nc," is ",DB))
+print(paste("Dunn index for k = ",nc," is ",dunn(xdist_euc,cl2)))
+clusters <- rbind(clusters, cl2)
+}
+print(paste("min DB for",(min_nc:max_nc)[which.min(res[,2])],"clusters=",min(res[,2])))
+print("clustering for min DB")
+print(clusters[which.min(res[,2]),])
+#write.table(res,file="DB_res.csv",sep=";",dec=",",row.names=TRUE,col.names=FALSE)
+plot(res, type="p", pch=0, xlab="Number of clusters", ylab="DB", xaxt="n")
+axis(1, c(min_nc:max_nc))
+```
+
+#variable list -> basis for purchase
+#clustering -> HCLUST
+#distance -> Manhattan
+#Method -> Complete,Average,Single,Ward.d,Ward.d2
+```{r}
+#four different methods
+HCM_Complete <- hclust(xdist_man, method = "complete" )
+HCM_Average <- hclust(xdist_man, method = "average" )
+HCM_Single <- hclust(xdist_man, method = "single" )
+HCM_Ward <- hclust(xdist_man, method = "ward.D" )
+HCM_WardD2 <- hclust(xdist_man, method = "ward.D2" )
+
+#dendrograms for different methods for heirarchical clustering
+#manhattan dissimilarity matrix
+plot(HCM_Complete, cex=0.3, hang=-3, main="hclust-complete")
+plot(HCM_Average, cex=0.3, hang=-3, main="hclust-average")
+plot(HCM_Single, cex=0.3, hang=-3, main="hclust-single")
+plot(HCM_Ward, cex=0.3, hang=-3, main="hclust-ward")
+plot(HCM_WardD2, cex=0.3, hang=-3, main="hclust-ward.D2")
+
+#Method = Complete
+#cutting tree based on clusters needed
+cut1_HC_c <- cutree(HCM_Complete, k = 2)
+table(cut1_HC_c)
+cut2_HC_c <- cutree(HCM_Complete, k = 3)
+table(cut2_HC_c)
+cut3_HC_c <- cutree(HCM_Complete, k = 4)
+table(cut3_HC_c)
+cut4_HC_c <- cutree(HCM_Complete, k = 5)
+table(cut4_HC_c)
+#plot clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_c ), main="hclust-manhattan-complete cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_c ), main="hclust-manhattan-complete cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_c ), main="hclust-manhattan-complete cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_c ), main="hclust-manhattan-complete cluster k=5")
+
+
+#Method = Average
+#cutting tree based on clusters needed
+cut1_HC_a <- cutree(HCM_Average, k = 2)
+table(cut1_HC_a)
+cut2_HC_a <- cutree(HCM_Average, k = 3)
+table(cut2_HC_a)
+cut3_HC_a <- cutree(HCM_Average, k = 4)
+table(cut3_HC_a)
+cut4_HC_a <- cutree(HCM_Average, k = 5)
+table(cut4_HC_a)
+#plot clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_a), main="hclust-manhattan-average cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_a ), main="hclust-manhattan-average cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_a ), main="hclust-manhattan-average cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_a ), main="hclust-manhattan-average cluster k=5")
+
+
+#Method = Single
+#cutting tree based on clusters needed
+cut1_HC_e <- cutree(HCM_Single, k = 2)
+table(cut1_HC_e)
+cut2_HC_e <- cutree(HCM_Single, k = 3)
+table(cut2_HC_e)
+cut3_HC_e <- cutree(HCM_Single, k = 4)
+table(cut3_HC_e)
+cut4_HC_e <- cutree(HCM_Single, k = 5)
+table(cut4_HC_e)
+#plot clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_e ), main="hclust-manhattan-single cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_e ), main="hclust-manhattan-single cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_e ), main="hclust-manhattan-single cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_e ), main="hclust-manhattan-single cluster k=5")
+
+
+#Method = Ward
+#cutting tree based on clusters needed
+cut1_HC_w <- cutree(HCM_Ward, k = 2)
+table(cut1_HC_w)
+cut2_HC_w <- cutree(HCM_Ward, k = 3)
+table(cut2_HC_w)
+cut3_HC_w <- cutree(HCM_Ward, k = 4)
+table(cut3_HC_w)
+cut4_HC_w <- cutree(HCM_Ward, k = 5)
+table(cut4_HC_w)
+#visualizing clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_w ), main="hclust-ward cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_w ), main="hclust-ward cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_w ), main="hclust-ward cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_w ), main="hclust-ward cluster k=5")
+
+#Method = Ward.D2
+#cutting tree based on clusters needed
+cut1_HC_wd2 <- cutree(HCM_WardD2, k = 2)
+table(cut1_HC_wd2)
+cut2_HC_wd2 <- cutree(HCM_WardD2, k = 3)
+table(cut2_HC_wd2)
+cut3_HC_wd2 <- cutree(HCM_WardD2, k = 4)
+table(cut3_HC_wd2)
+cut4_HC_wd2 <- cutree(HCM_WardD2, k = 5)
+table(cut4_HC_wd2)
+#visualizing clusters
+fviz_cluster(list(data=xbfp,cluster=cut1_HC_wd2 ), main="hclust-ward D2 cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HC_wd2 ), main="hclust-ward D2 cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HC_wd2 ), main="hclust-ward D2 cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HC_wd2 ), main="hclust-ward D2 cluster k=5")
+
+```
+
+#evaluate above clusters by DB Index and Dunn Index
+```{r}
+#evaulate DB and Dunn index for all clusters - Manhattan
+#change method inside for loop and run for all five methods
+library(clusterSim)
+#xdist_man <- dist(xbfp, method="manhattan")
+#nc - number_of_clusters
+min_nc=2
+max_nc=5
+res <- array(0, c(max_nc-min_nc+1, 2))
+res[,1] <- min_nc:max_nc
+clusters <- NULL
+for (nc in min_nc:max_nc)
+{
+hc <- hclust(xdist_man, method= "ward.D2")
+cl2 <- cutree(hc, k=nc)
+res[nc-min_nc+1, 2] <- DB <- index.DB(xdist_man, cl2, centrotypes="centroids")$DB
+print(paste("DB index for k = ",nc," is ",DB))
+print(paste("Dunn index for k = ",nc," is ",dunn(xdist_euc,cl2)))
+clusters <- rbind(clusters, cl2)
+}
+print(paste("min DB for",(min_nc:max_nc)[which.min(res[,2])],"clusters=",min(res[,2])))
+print("clustering for min DB")
+print(clusters[which.min(res[,2]),])
+#write.table(res,file="DB_res.csv",sep=";",dec=",",row.names=TRUE,col.names=FALSE)
+plot(res, type="p", pch=0, xlab="Number of clusters", ylab="DB", xaxt="n")
+axis(1, c(min_nc:max_nc))
+```
+
+#End of HCLUST Basis for Purchase
+
+#Agnes clustering for basis for purchase 
+```{r}
+library("cluster")
+set.seed(1234)
+#using agnes from the cluster package
+
+#euclidean
+HCE_ag_w <- agnes(xdist_euc, method = "ward")
+#single
+HCE_ag_s <- agnes(xdist_euc, method = "single")
+#complete
+HCE_ag_c <- agnes(xdist_euc, method = "complete")
+#average
+HCE_ag_a <- agnes(xdist_euc, method = "average")
+
+#check the agglomerative coeff given by agnes
+#ward method
+HCE_ag_w$ac
+#single method
+HCE_ag_s$ac
+#complete method
+HCE_ag_c$ac
+#average method
+HCE_ag_a$ac
+
+#ward has the best agglomerative coefficients
+
+#cutting tree based on clusters needed
+cut1_HCE_ag_w <- cutree(HCE_ag_w, k = 2)
+table(cut1_HCE_ag_w)
+DB <- index.DB(xdist_euc, cut1_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",2," is ",DB))
+print(paste("Dunn index for k = ",2," is ",dunn(xdist_euc,cut1_HCE_ag_w)))
+
+cut2_HCE_ag_w <- cutree(HCE_ag_w, k = 3)
+table(cut2_HCE_ag_w)
+DB <- index.DB(xdist_euc, cut2_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",3," is ",DB))
+print(paste("Dunn index for k = ",3," is ",dunn(xdist_euc,cut2_HCE_ag_w)))
+
+cut3_HCE_ag_w <- cutree(HCE_ag_w, k = 4)
+table(cut3_HCE_ag_w)
+DB <- index.DB(xdist_euc, cut3_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",4," is ",DB))
+print(paste("Dunn index for k = ",4," is ",dunn(xdist_euc,cut3_HCE_ag_w)))
+
+cut4_HCE_ag_w <- cutree(HCE_ag_w , k = 5)
+table(cut4_HCE_ag_w)
+DB <- index.DB(xdist_euc, cut4_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",5," is ",DB))
+print(paste("Dunn index for k = ",5," is ",dunn(xdist_euc,cut4_HCE_ag_w)))
+
+fviz_cluster(list(data=xbfp,cluster=cut1_HCE_ag_w ), main="agnes-euclidean-ward cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HCE_ag_w ), main="agnes-euclidean-ward cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HCE_ag_w ), main="agnes-euclidean-ward cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HCE_ag_w ), main="agnes-euclidean-ward cluster k=5")
+
+#manhattan
+HCM_ag_w <- agnes(xdist_man, method = "ward")
+#single
+HCM_ag_s <- agnes(xdist_man, method = "single")
+#complete
+HCM_ag_c <- agnes(xdist_man, method = "complete")
+#average
+HCM_ag_a <- agnes(xdist_man, method = "average")
+
+#check the agglomerative coeff given by agnes
+#ward method
+HCM_ag_w$ac
+#single method
+HCM_ag_s$ac
+#complete method
+HCM_ag_c$ac
+#average method
+HCM_ag_a$ac
+
+#ward has the best agglomerative coefficient
+#cutting tree based on clusters needed
+cut1_HCM_ag_w <- cutree(HCM_ag_w, k = 2)
+table(cut1_HCM_ag_w)
+DB <- index.DB(xdist_man, cut1_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",2," is ",DB))
+print(paste("Dunn index for k = ",2," is ",dunn(xdist_man,cut1_HCM_ag_w)))
+
+cut2_HCM_ag_w <- cutree(HCM_ag_w, k = 3)
+table(cut2_HCM_ag_w)
+DB <- index.DB(xdist_man, cut2_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",3," is ",DB))
+print(paste("Dunn index for k = ",3," is ",dunn(xdist_man,cut2_HCM_ag_w)))
+
+cut3_HCM_ag_w <- cutree(HCM_ag_w, k = 4)
+table(cut3_HCM_ag_w)
+DB <- index.DB(xdist_man, cut3_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",4," is ",DB))
+print(paste("Dunn index for k = ",4," is ",dunn(xdist_man,cut3_HCM_ag_w)))
+
+
+cut4_HCM_ag_w <- cutree(HCM_ag_w, k = 5)
+table(cut4_HCM_ag_w)
+DB <- index.DB(xdist_man, cut4_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",5," is ",DB))
+print(paste("Dunn index for k = ",5," is ",dunn(xdist_man,cut4_HCM_ag_w)))
+
+
+fviz_cluster(list(data=xbfp,cluster=cut1_HCM_ag_w ), main="agnes-manhattan-ward cluster k=2")
+fviz_cluster(list(data=xbfp,cluster=cut2_HCM_ag_w ), main="agnes-manhattan-ward cluster k=3")
+fviz_cluster(list(data=xbfp,cluster=cut3_HCM_ag_w ), main="agnes-manhattan-ward cluster k=4")
+fviz_cluster(list(data=xbfp,cluster=cut4_HCM_ag_w ), main="agnes-manhattan-ward cluster k=5")
+
+```
+
+```{r}
+#dendograms using fviz_dend
+fviz_dend(HCE_ag_w,main = "Cluster Dendrogram for Basis for Purchase")
+
+fviz_dend(HCE_ag_w, k=3, color_labels_by_k = FALSE, rect=TRUE, main="Cluster Dendrogram for Basis for Purchase")
+
+#circular dendogram
+fviz_dend(HCE_ag_w, k=3, color_labels_by_k = TRUE, type="circular", rect=TRUE, main="Cluster Dendrogram for Basis for Purchase")
+```
+
+#######PURCHASE BEHAVIOR###########
+#Purchase Behavior HCLUST
+```{r}
+x<- bsd
+set.seed(1234)
+PURCHASE_BEHAVIOR <- c('No__of_Brands', 'Brand_Runs', 'Total_Volume', 'No__of__Trans', 'Value', 'Trans___Brand_Runs', 'Vol_Tran', 'Avg__Price', 'maxBr', 'Others_999')
+xpb<-x %>% select(PURCHASE_BEHAVIOR) %>% scale() 
+```
+
+#Dissimilarity matrix - Euclidean and Manhattan
+```{r}
+#Dissimilarity matrix from euclidean
+xdist_euc <- dist(xpb, method = "euclidean")
+#Dissimilarity matrix from manhattan
+xdist_man <- dist(xpb, method = "manhattan")
+```
+
+#purchase behaviour
+#different HCLUST method for euclidean dissimilarity matrix
+```{r}
+#basis of purchase
+#four different methods
+HCE_Complete <- hclust(xdist_euc, method = "complete" )
+HCE_Average <- hclust(xdist_euc, method = "average" )
+HCE_Single <- hclust(xdist_euc, method = "single" )
+HCE_Ward <- hclust(xdist_euc, method = "ward.D" )
+HCE_WardD2 <- hclust(xdist_euc, method = "ward.D2" )
+
+#dendrograms for different methods for heirarchical clustering
+#euclidean dissimilarity matrix
+plot(HCE_Complete, cex=0.3, hang=-3, main="hclust-complete")
+plot(HCE_Average, cex=0.3, hang=-3, main="hclust-average")
+plot(HCE_Single, cex=0.3, hang=-3, main="hclust-single")
+plot(HCE_Ward, cex=0.3, hang=-3, main="hclust-ward")
+plot(HCE_WardD2, cex=0.3, hang=-3, main="hclust-ward.D2")
+
+#Method = Complete
+#cutting tree based on clusters needed
+cut1_HC_c <- cutree(HCE_Complete, k = 2)
+table(cut1_HC_c)
+cut2_HC_c <- cutree(HCE_Complete, k = 3)
+table(cut2_HC_c)
+cut3_HC_c <- cutree(HCE_Complete, k = 4)
+table(cut3_HC_c)
+cut4_HC_c <- cutree(HCE_Complete, k = 5)
+table(cut4_HC_c)
+#plot clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_c ), main="hclust-euclidean-complete cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_c ), main="hclust-euclidean-complete cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_c ), main="hclust-euclidean-complete cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_c ), main="hclust-euclidean-complete cluster k=5")
+
+
+#Method = Average
+#cutting tree based on clusters needed
+cut1_HC_a <- cutree(HCE_Average, k = 2)
+table(cut1_HC_a)
+cut2_HC_a <- cutree(HCE_Average, k = 3)
+table(cut2_HC_a)
+cut3_HC_a <- cutree(HCE_Average, k = 4)
+table(cut3_HC_a)
+cut4_HC_a <- cutree(HCE_Average, k = 5)
+table(cut4_HC_a)
+#plot clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_a), main="hclust-euclidean-average cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_a ), main="hclust-euclidean-average cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_a ), main="hclust-euclidean-average cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_a ), main="hclust-euclidean-average cluster k=5")
+
+
+#Method = Single
+#cutting tree based on clusters needed
+cut1_HC_e <- cutree(HCE_Single, k = 2)
+table(cut1_HC_e)
+cut2_HC_e <- cutree(HCE_Single, k = 3)
+table(cut2_HC_e)
+cut3_HC_e <- cutree(HCE_Single, k = 4)
+table(cut3_HC_e)
+cut4_HC_e <- cutree(HCE_Single, k = 5)
+table(cut4_HC_e)
+#plot clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_e ), main="hclust-euclidean-single cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_e ), main="hclust-euclidean-single cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_e ), main="hclust-euclidean-single cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_e ), main="hclust-euclidean-single cluster k=5")
+
+
+#Method = Ward
+#cutting tree based on clusters needed
+cut1_HC_w <- cutree(HCE_Ward, k = 2)
+table(cut1_HC_w)
+cut2_HC_w <- cutree(HCE_Ward, k = 3)
+table(cut2_HC_w)
+cut3_HC_w <- cutree(HCE_Ward, k = 4)
+table(cut3_HC_w)
+cut4_HC_w <- cutree(HCE_Ward, k = 5)
+table(cut4_HC_w)
+#visualizing clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_w ), main="hclust-ward cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_w ), main="hclust-ward cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_w ), main="hclust-ward cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_w ), main="hclust-ward cluster k=5")
+
+#Method = Ward.D2
+#cutting tree based on clusters needed
+cut1_HC_wd2 <- cutree(HCE_WardD2, k = 2)
+table(cut1_HC_wd2)
+cut2_HC_wd2 <- cutree(HCE_WardD2, k = 3)
+table(cut2_HC_wd2)
+cut3_HC_wd2 <- cutree(HCE_WardD2, k = 4)
+table(cut3_HC_wd2)
+cut4_HC_wd2 <- cutree(HCE_WardD2, k = 5)
+table(cut4_HC_wd2)
+#visualizing clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_wd2 ), main="hclust-ward cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_wd2 ), main="hclust-ward cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_wd2 ), main="hclust-ward cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_wd2 ), main="hclust-ward cluster k=5")
+
+
+```
+
+
+#evaluate above clusters by DB Index and Dunn Index
+```{r}
+#evaulate DB index for all clusters
+#change method inside for loop and run for all five methods
+library(clusterSim)
+#xdist_euc <- dist(xbfp, method="euclidean")
+#nc - number_of_clusters
+min_nc=2
+max_nc=5
+res <- array(0, c(max_nc-min_nc+1, 2))
+res[,1] <- min_nc:max_nc
+clusters <- NULL
+for (nc in min_nc:max_nc)
+{
+hc <- hclust(xdist_euc, method= "ward.D2")
+cl2 <- cutree(hc, k=nc)
+res[nc-min_nc+1, 2] <- DB <- index.DB(xdist_euc, cl2, centrotypes="centroids")$DB
+print(paste("DB index for k = ",nc," is ",DB))
+print(paste("Dunn index for k = ",nc," is ",dunn(xdist_euc,cl2)))
+clusters <- rbind(clusters, cl2)
+}
+print(paste("min DB for",(min_nc:max_nc)[which.min(res[,2])],"clusters=",min(res[,2])))
+print("clustering for min DB")
+print(clusters[which.min(res[,2]),])
+#write.table(res,file="DB_res.csv",sep=";",dec=",",row.names=TRUE,col.names=FALSE)
+plot(res, type="p", pch=0, xlab="Number of clusters", ylab="DB", xaxt="n")
+axis(1, c(min_nc:max_nc))
+```
+
+
+#different HCLUST method for manhattan dissimilarity matrix
+```{r}
+#five different methods
+HCM_Complete <- hclust(xdist_man, method = "complete" )
+HCM_Average <- hclust(xdist_man, method = "average" )
+HCM_Single <- hclust(xdist_man, method = "single" )
+HCM_Ward <- hclust(xdist_man, method = "ward.D" )
+HCM_WardD2 <- hclust(xdist_man, method = "ward.D2" )
+
+#dendrograms for different methods for heirarchical clustering
+#manhattan dissimilarity matrix
+plot(HCM_Complete, cex=0.3, hang=-3, main="hclust-complete")
+plot(HCM_Average, cex=0.3, hang=-3, main="hclust-average")
+plot(HCM_Single, cex=0.3, hang=-3, main="hclust-single")
+plot(HCM_Ward, cex=0.3, hang=-3, main="hclust-ward")
+plot(HCM_WardD2, cex=0.3, hang=-3, main="hclust-ward.D2")
+
+#Method = Complete
+#cutting tree based on clusters needed
+cut1_HC_c <- cutree(HCM_Complete, k = 2)
+table(cut1_HC_c)
+cut2_HC_c <- cutree(HCM_Complete, k = 3)
+table(cut2_HC_c)
+cut3_HC_c <- cutree(HCM_Complete, k = 4)
+table(cut3_HC_c)
+cut4_HC_c <- cutree(HCM_Complete, k = 5)
+table(cut4_HC_c)
+#plot clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_c ), main="hclust-manhattan-complete cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_c ), main="hclust-manhattan-complete cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_c ), main="hclust-manhattan-complete cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_c ), main="hclust-manhattan-complete cluster k=5")
+
+
+#Method = Average
+#cutting tree based on clusters needed
+cut1_HC_a <- cutree(HCM_Average, k = 2)
+table(cut1_HC_a)
+cut2_HC_a <- cutree(HCM_Average, k = 3)
+table(cut2_HC_a)
+cut3_HC_a <- cutree(HCM_Average, k = 4)
+table(cut3_HC_a)
+cut4_HC_a <- cutree(HCM_Average, k = 5)
+table(cut4_HC_a)
+#plot clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_a), main="hclust-manhattan-average cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_a ), main="hclust-manhattan-average cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_a ), main="hclust-manhattan-average cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_a ), main="hclust-manhattan-average cluster k=5")
+
+
+#Method = Single
+#cutting tree based on clusters needed
+cut1_HC_e <- cutree(HCM_Single, k = 2)
+table(cut1_HC_e)
+cut2_HC_e <- cutree(HCM_Single, k = 3)
+table(cut2_HC_e)
+cut3_HC_e <- cutree(HCM_Single, k = 4)
+table(cut3_HC_e)
+cut4_HC_e <- cutree(HCM_Single, k = 5)
+table(cut4_HC_e)
+#plot clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_e ), main="hclust-manhattan-single cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_e ), main="hclust-manhattan-single cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_e ), main="hclust-manhattan-single cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_e ), main="hclust-manhattan-single cluster k=5")
+
+
+#Method = Ward
+#cutting tree based on clusters needed
+cut1_HC_w <- cutree(HCM_Ward, k = 2)
+table(cut1_HC_w)
+cut2_HC_w <- cutree(HCM_Ward, k = 3)
+table(cut2_HC_w)
+cut3_HC_w <- cutree(HCM_Ward, k = 4)
+table(cut3_HC_w)
+cut4_HC_w <- cutree(HCM_Ward, k = 5)
+table(cut4_HC_w)
+#visualizing clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_w ), main="hclust-ward cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_w ), main="hclust-ward cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_w ), main="hclust-ward cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_w ), main="hclust-ward cluster k=5")
+
+#Method = Ward.D2
+#cutting tree based on clusters needed
+cut1_HC_wd2 <- cutree(HCM_WardD2, k = 2)
+table(cut1_HC_wd2)
+cut2_HC_wd2 <- cutree(HCM_WardD2, k = 3)
+table(cut2_HC_wd2)
+cut3_HC_wd2 <- cutree(HCM_WardD2, k = 4)
+table(cut3_HC_wd2)
+cut4_HC_wd2 <- cutree(HCM_WardD2, k = 5)
+table(cut4_HC_wd2)
+#visualizing clusters
+fviz_cluster(list(data=xpb,cluster=cut1_HC_wd2 ), main="hclust-ward D2 cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HC_wd2 ), main="hclust-ward D2 cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HC_wd2 ), main="hclust-ward D2 cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HC_wd2 ), main="hclust-ward D2 cluster k=5")
+
+```
+
+#Purchase Behaviour
+#Manhattan, dunn and DB index
+```{r}
+#evaulate DB and Dunn index for all clusters - Manhattan
+#change method inside for loop and run for all five methods
+library(clusterSim)
+#xdist_man <- dist(xbfp, method="manhattan")
+#nc - number_of_clusters
+min_nc=2
+max_nc=5
+res <- array(0, c(max_nc-min_nc+1, 2))
+res[,1] <- min_nc:max_nc
+clusters <- NULL
+for (nc in min_nc:max_nc)
+{
+hc <- hclust(xdist_man, method= "ward.D2")
+cl2 <- cutree(hc, k=nc)
+res[nc-min_nc+1, 2] <- DB <- index.DB(xdist_man, cl2, centrotypes="centroids")$DB
+print(paste("DB index for k = ",nc," is ",DB))
+print(paste("Dunn index for k = ",nc," is ",dunn(xdist_euc,cl2)))
+clusters <- rbind(clusters, cl2)
+}
+print(paste("min DB for",(min_nc:max_nc)[which.min(res[,2])],"clusters=",min(res[,2])))
+print("clustering for min DB")
+print(clusters[which.min(res[,2]),])
+#write.table(res,file="DB_res.csv",sep=";",dec=",",row.names=TRUE,col.names=FALSE)
+plot(res, type="p", pch=0, xlab="Number of clusters", ylab="DB", xaxt="n")
+axis(1, c(min_nc:max_nc))
+```
+
+#End of Purchase Behaviour HCLUST
+
+#Agnes clustering for Purchase Behaviour
+```{r}
+library("cluster")
+set.seed(1234)
+#using agnes from the cluster package
+
+#euclidean
+HCE_ag_w <- agnes(xdist_euc, method = "ward")
+#single
+HCE_ag_s <- agnes(xdist_euc, method = "single")
+#complete
+HCE_ag_c <- agnes(xdist_euc, method = "complete")
+#average
+HCE_ag_a <- agnes(xdist_euc, method = "average")
+
+#check the agglomerative coeff given by agnes
+#ward method
+HCE_ag_w$ac
+#single method
+HCE_ag_s$ac
+#complete method
+HCE_ag_c$ac
+#average method
+HCE_ag_a$ac
+
+#ward has the best agglomerative coefficients
+
+#cutting tree based on clusters needed
+cut1_HCE_ag_w <- cutree(HCE_ag_w, k = 2)
+table(cut1_HCE_ag_w)
+DB <- index.DB(xdist_euc, cut1_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",2," is ",DB))
+print(paste("Dunn index for k = ",2," is ",dunn(xdist_euc,cut1_HCE_ag_w)))
+
+cut2_HCE_ag_w <- cutree(HCE_ag_w, k = 3)
+table(cut2_HCE_ag_w)
+DB <- index.DB(xdist_euc, cut2_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",3," is ",DB))
+print(paste("Dunn index for k = ",3," is ",dunn(xdist_euc,cut2_HCE_ag_w)))
+
+cut3_HCE_ag_w <- cutree(HCE_ag_w, k = 4)
+table(cut3_HCE_ag_w)
+DB <- index.DB(xdist_euc, cut3_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",4," is ",DB))
+print(paste("Dunn index for k = ",4," is ",dunn(xdist_euc,cut3_HCE_ag_w)))
+
+cut4_HCE_ag_w <- cutree(HCE_ag_w , k = 5)
+table(cut4_HCE_ag_w)
+DB <- index.DB(xdist_euc, cut4_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",5," is ",DB))
+print(paste("Dunn index for k = ",5," is ",dunn(xdist_euc,cut4_HCE_ag_w)))
+
+fviz_cluster(list(data=xpb,cluster=cut1_HCE_ag_w ), main="agnes-euclidean-ward cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HCE_ag_w ), main="agnes-euclidean-ward cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HCE_ag_w ), main="agnes-euclidean-ward cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HCE_ag_w ), main="agnes-euclidean-ward cluster k=5")
+
+#manhattan
+HCM_ag_w <- agnes(xdist_man, method = "ward")
+#single
+HCM_ag_s <- agnes(xdist_man, method = "single")
+#complete
+HCM_ag_c <- agnes(xdist_man, method = "complete")
+#average
+HCM_ag_a <- agnes(xdist_man, method = "average")
+
+#check the agglomerative coeff given by agnes
+#ward method
+HCM_ag_w$ac
+#single method
+HCM_ag_s$ac
+#complete method
+HCM_ag_c$ac
+#average method
+HCM_ag_a$ac
+
+#ward has the best agglomerative coefficient
+#cutting tree based on clusters needed
+cut1_HCM_ag_w <- cutree(HCM_ag_w, k = 2)
+table(cut1_HCM_ag_w)
+DB <- index.DB(xdist_man, cut1_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",2," is ",DB))
+print(paste("Dunn index for k = ",2," is ",dunn(xdist_man,cut1_HCM_ag_w)))
+
+cut2_HCM_ag_w <- cutree(HCM_ag_w, k = 3)
+table(cut2_HCM_ag_w)
+DB <- index.DB(xdist_man, cut2_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",3," is ",DB))
+print(paste("Dunn index for k = ",3," is ",dunn(xdist_man,cut2_HCM_ag_w)))
+
+cut3_HCM_ag_w <- cutree(HCM_ag_w, k = 4)
+table(cut3_HCM_ag_w)
+DB <- index.DB(xdist_man, cut3_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",4," is ",DB))
+print(paste("Dunn index for k = ",4," is ",dunn(xdist_man,cut3_HCM_ag_w)))
+
+
+cut4_HCM_ag_w <- cutree(HCM_ag_w, k = 5)
+table(cut4_HCM_ag_w)
+DB <- index.DB(xdist_man, cut4_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",5," is ",DB))
+print(paste("Dunn index for k = ",5," is ",dunn(xdist_man,cut4_HCM_ag_w)))
+
+
+fviz_cluster(list(data=xpb,cluster=cut1_HCM_ag_w ), main="agnes-manhattan-ward cluster k=2")
+fviz_cluster(list(data=xpb,cluster=cut2_HCM_ag_w ), main="agnes-manhattan-ward cluster k=3")
+fviz_cluster(list(data=xpb,cluster=cut3_HCM_ag_w ), main="agnes-manhattan-ward cluster k=4")
+fviz_cluster(list(data=xpb,cluster=cut4_HCM_ag_w ), main="agnes-manhattan-ward cluster k=5")
+
+```
+
+#dendrogram for best model
+```{r}
+fviz_dend(HCE_ag_w, k=3, color_labels_by_k = FALSE, rect=TRUE, main="Cluster Dendrogram for Purchase Behavior")
+
+#circular dendogram
+fviz_dend(HCE_ag_w, k=3, color_labels_by_k = TRUE, type="circular", rect=TRUE, main="Cluster Dendrogram for Purchase Behavior")
+```
+#########BOTH VARIABLES###########
+#Both variables combined - HCLUST
+```{r}
+#Create a scaled dataset for clustering, and use this
+set.seed(1234)
+xpb <- bsd %>% select(PURCHASE_BEHAVIOR) %>% scale()
+xbfp <- bsd %>% select(BASIS_FOR_PURCHASE) %>% scale()
+xboth<- bsd %>% select(PURCHASE_BEHAVIOR, BASIS_FOR_PURCHASE) %>% scale() 
+
+# Perform k-means clustering on a data matrix
+class(xboth)
+```
+
+#Dissimilarity matrix from euclidean and manhattan
+```{r}
+#Dissimilarity matrix from euclidean
+xbothdist_euc <- dist(xboth, method = "euclidean")
+#Dissimilarity matrix from manhattan
+xbothdist_man <- dist(xboth, method = "manhattan")
+```
+# variable set both
+# distance -> Euclidean
+# Mehtod -> Single, Average, Complete, Ward.D, Ward.D2
+```{r}
+#both
+#four different methods
+HCBoth_Complete <- hclust(xbothdist_euc, method = "complete" )
+HCBoth_Average <- hclust(xbothdist_euc, method = "average" )
+HCBoth_Single <- hclust(xbothdist_euc, method = "single" )
+HCBoth_Ward <- hclust(xbothdist_euc, method = "ward.D" )
+HCBoth_WardD2 <- hclust(xbothdist_euc, method = "ward.D2" )
+
+#dendrograms for different methods for heirarchical clustering
+#euclidean dissimilarity matrix
+plot(HCBoth_Complete, cex=0.3, hang=-3, main="hclust-complete")
+plot(HCBoth_Average, cex=0.3, hang=-3, main="hclust-average")
+plot(HCBoth_Single, cex=0.3, hang=-3, main="hclust-single")
+plot(HCBoth_Ward, cex=0.3, hang=-3, main="hclust-ward")
+plot(HCBoth_WardD2, cex=0.3, hang=-3, main="hclust-ward.D2")
+
+#Method = Complete
+#cutting tree based on clusters needed
+cut1_HC_c <- cutree(HCBoth_Complete, k = 4)
+table(cut1_HC_c)
+cut2_HC_c <- cutree(HCBoth_Complete, k = 5)
+table(cut2_HC_c)
+cut3_HC_c <- cutree(HCBoth_Complete, k = 6)
+table(cut3_HC_c)
+cut4_HC_c <- cutree(HCBoth_Complete, k = 7)
+table(cut4_HC_c)
+cut5_HC_c <- cutree(HCBoth_Complete, k = 8)
+table(cut5_HC_c)
+#plot clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_c ), main="hclust-euclidean-complete cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_c ), main="hclust-euclidean-complete cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_c ), main="hclust-euclidean-complete cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_c ), main="hclust-euclidean-complete cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_c ), main="hclust-euclidean-complete cluster k=8")
+
+
+#Method = Average
+#cutting tree based on clusters needed
+cut1_HC_a <- cutree(HCBoth_Average, k = 4)
+table(cut1_HC_a)
+cut2_HC_a <- cutree(HCBoth_Average, k = 5)
+table(cut2_HC_a)
+cut3_HC_a <- cutree(HCBoth_Average, k = 6)
+table(cut3_HC_a)
+cut4_HC_a <- cutree(HCBoth_Average, k = 7)
+table(cut4_HC_a)
+cut5_HC_a <- cutree(HCBoth_Average, k = 8)
+table(cut5_HC_a)
+#plot clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_a), main="hclust-euclidean-average cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_a ), main="hclust-euclidean-average cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_a ), main="hclust-euclidean-average cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_a ), main="hclust-euclidean-average cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_a ), main="hclust-euclidean-average cluster k=8")
+
+
+#Method = Single
+#cutting tree based on clusters needed
+cut1_HC_e <- cutree(HCBoth_Single, k = 4)
+table(cut1_HC_e)
+cut2_HC_e <- cutree(HCBoth_Single, k = 5)
+table(cut2_HC_e)
+cut3_HC_e <- cutree(HCBoth_Single, k = 6)
+table(cut3_HC_e)
+cut4_HC_e <- cutree(HCBoth_Single, k = 7)
+table(cut4_HC_e)
+cut5_HC_e <- cutree(HCBoth_Single, k = 8)
+table(cut5_HC_e)
+#plot clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_e ), main="hclust-euclidean-single cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_e ), main="hclust-euclidean-single cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_e ), main="hclust-euclidean-single cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_e ), main="hclust-euclidean-single cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_e ), main="hclust-euclidean-single cluster k=8")
+
+
+#Method = Ward
+#cutting tree based on clusters needed
+cut1_HC_w <- cutree(HCBoth_Ward, k = 4)
+table(cut1_HC_w)
+cut2_HC_w <- cutree(HCBoth_Ward, k = 5)
+table(cut2_HC_w)
+cut3_HC_w <- cutree(HCBoth_Ward, k = 6)
+table(cut3_HC_w)
+cut4_HC_w <- cutree(HCBoth_Ward, k = 7)
+table(cut4_HC_w)
+cut5_HC_w <- cutree(HCBoth_Ward, k = 8)
+table(cut5_HC_w)
+#visualizing clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_w ), main="hclust-ward cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_w ), main="hclust-ward cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_w ), main="hclust-ward cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_w ), main="hclust-ward cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_w ), main="hclust-ward cluster k=8")
+
+#Method = Ward.D2
+#cutting tree based on clusters needed
+cut1_HC_wd2 <- cutree(HCBoth_WardD2, k = 4)
+table(cut1_HC_wd2)
+cut2_HC_wd2 <- cutree(HCBoth_WardD2, k = 5)
+table(cut2_HC_wd2)
+cut3_HC_wd2 <- cutree(HCBoth_WardD2, k = 6)
+table(cut3_HC_wd2)
+cut4_HC_wd2 <- cutree(HCBoth_WardD2, k = 7)
+table(cut4_HC_wd2)
+cut5_HC_wd2 <- cutree(HCBoth_WardD2, k = 8)
+table(cut5_HC_wd2)
+#visualizing clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_wd2 ), main="hclust-ward.D2 cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_wd2 ), main="hclust-ward.D2 cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_wd2 ), main="hclust-ward.D2 cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_wd2 ), main="hclust-ward.D2 cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_wd2 ), main="hclust-ward.D2 cluster k=8")
+```
+
+#DB index and Dunn Index for both variables
+#Euclidean
+```{r}
+#evaulate DB index for all clusters
+#change method inside for loop and run for all five methods
+library(clusterSim)
+#xbothdist_euc <- dist(xbfp, method="euclidean")
+#nc - number_of_clusters
+min_nc=4
+max_nc=8
+res <- array(0, c(max_nc-min_nc+1, 2))
+res[,1] <- min_nc:max_nc
+clusters <- NULL
+for (nc in min_nc:max_nc)
+{
+hc <- hclust(xbothdist_euc, method= "ward.D2")
+cl2 <- cutree(hc, k=nc)
+res[nc-min_nc+1, 2] <- DB <- index.DB(xbothdist_euc, cl2, centrotypes="centroids")$DB
+print(paste("DB index for k = ",nc," is ",DB))
+print(paste("Dunn index for k = ",nc," is ",dunn(xbothdist_euc,cl2)))
+clusters <- rbind(clusters, cl2)
+}
+print(paste("min DB for",(min_nc:max_nc)[which.min(res[,2])],"clusters=",min(res[,2])))
+print("clustering for min DB")
+print(clusters[which.min(res[,2]),])
+#write.table(res,file="DB_res.csv",sep=";",dec=",",row.names=TRUE,col.names=FALSE)
+plot(res, type="p", pch=0, xlab="Number of clusters", ylab="DB", xaxt="n")
+axis(1, c(min_nc:max_nc))
+```
+
+# variable set both
+# distance -> Manhattan
+# Mehtod -> Single, Average, Complete, Ward.D, Ward.D2
+```{r}
+#both
+#five different methods
+HCMBoth_Complete <- hclust(xbothdist_man, method = "complete" )
+HCMBoth_Average <- hclust(xbothdist_man, method = "average" )
+HCMBoth_Single <- hclust(xbothdist_man, method = "single" )
+HCMBoth_Ward <- hclust(xbothdist_man, method = "ward.D" )
+HCMBoth_WardD2 <- hclust(xbothdist_man, method = "ward.D2" )
+
+#dendrograms for different methods for heirarchical clustering
+#euclidean dissimilarity matrix
+plot(HCMBoth_Complete, cex=0.3, hang=-3, main="hclust-complete")
+plot(HCMBoth_Average, cex=0.3, hang=-3, main="hclust-average")
+plot(HCMBoth_Single, cex=0.3, hang=-3, main="hclust-single")
+plot(HCMBoth_Ward, cex=0.3, hang=-3, main="hclust-ward")
+plot(HCMBoth_WardD2, cex=0.3, hang=-3, main="hclust-ward.D2")
+
+#Method = Complete
+#cutting tree based on clusters needed
+cut1_HC_c <- cutree(HCMBoth_Complete, k = 4)
+table(cut1_HC_c)
+cut2_HC_c <- cutree(HCMBoth_Complete, k = 5)
+table(cut2_HC_c)
+cut3_HC_c <- cutree(HCMBoth_Complete, k = 6)
+table(cut3_HC_c)
+cut4_HC_c <- cutree(HCMBoth_Complete, k = 7)
+table(cut4_HC_c)
+cut5_HC_c <- cutree(HCMBoth_Complete, k = 8)
+table(cut5_HC_c)
+#plot clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_c ), main="hclust-euclidean-complete cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_c ), main="hclust-euclidean-complete cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_c ), main="hclust-euclidean-complete cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_c ), main="hclust-euclidean-complete cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_c ), main="hclust-euclidean-complete cluster k=8")
+
+
+#Method = Average
+#cutting tree based on clusters needed
+cut1_HC_a <- cutree(HCMBoth_Average, k = 4)
+table(cut1_HC_a)
+cut2_HC_a <- cutree(HCMBoth_Average, k = 5)
+table(cut2_HC_a)
+cut3_HC_a <- cutree(HCMBoth_Average, k = 6)
+table(cut3_HC_a)
+cut4_HC_a <- cutree(HCMBoth_Average, k = 7)
+table(cut4_HC_a)
+cut5_HC_a <- cutree(HCMBoth_Average, k = 8)
+table(cut5_HC_a)
+#plot clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_a), main="hclust-manhattan-average cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_a ), main="hclust-manhattan-average cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_a ), main="hclust-manhattan-average cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_a ), main="hclust-manhattan-average cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_a ), main="hclust-manhattan-average cluster k=8")
+
+
+#Method = Single
+#cutting tree based on clusters needed
+cut1_HC_e <- cutree(HCMBoth_Single, k = 4)
+table(cut1_HC_e)
+cut2_HC_e <- cutree(HCMBoth_Single, k = 5)
+table(cut2_HC_e)
+cut3_HC_e <- cutree(HCMBoth_Single, k = 6)
+table(cut3_HC_e)
+cut4_HC_e <- cutree(HCMBoth_Single, k = 7)
+table(cut4_HC_e)
+cut5_HC_e <- cutree(HCMBoth_Single, k = 8)
+table(cut5_HC_e)
+#plot clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_e ), main="hclust-manhattan-single cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_e ), main="hclust-manhattan-single cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_e ), main="hclust-manhattan-single cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_e ), main="hclust-manhattan-single cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_e ), main="hclust-manhattan-single cluster k=8")
+
+
+#Method = Ward
+#cutting tree based on clusters needed
+cut1_HC_w <- cutree(HCMBoth_Ward, k = 4)
+table(cut1_HC_w)
+cut2_HC_w <- cutree(HCMBoth_Ward, k = 5)
+table(cut2_HC_w)
+cut3_HC_w <- cutree(HCMBoth_Ward, k = 6)
+table(cut3_HC_w)
+cut4_HC_w <- cutree(HCMBoth_Ward, k = 7)
+table(cut4_HC_w)
+cut5_HC_w <- cutree(HCMBoth_Ward, k = 8)
+table(cut5_HC_w)
+#visualizing clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_w ), main="hclust-manhattan-ward cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_w ), main="hclust-manhattan-ward cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_w ), main="hclust-manhattan-ward cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_w ), main="hclust-manhattan-ward cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_w ), main="hclust-manhattan-ward cluster k=8")
+
+#Method = Ward.D2
+#cutting tree based on clusters needed
+cut1_HC_wd2 <- cutree(HCMBoth_WardD2, k = 4)
+table(cut1_HC_wd2)
+cut2_HC_wd2 <- cutree(HCMBoth_WardD2, k = 5)
+table(cut2_HC_wd2)
+cut3_HC_wd2 <- cutree(HCMBoth_WardD2, k = 6)
+table(cut3_HC_wd2)
+cut4_HC_wd2 <- cutree(HCMBoth_WardD2, k = 7)
+table(cut4_HC_wd2)
+cut5_HC_wd2 <- cutree(HCMBoth_WardD2, k = 8)
+table(cut5_HC_wd2)
+#visualizing clusters
+fviz_cluster(list(data=xboth,cluster=cut1_HC_wd2 ), main="hclust-manhattan-ward.D2 cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HC_wd2 ), main="hclust-manhattan-ward.D2 cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HC_wd2 ), main="hclust-manhattan-ward.D2 cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HC_wd2 ), main="hclust-manhattan-ward.D2 cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HC_wd2 ), main="hclust-manhattan-ward.D2 cluster k=8")
+
+
+```
+
+#DB index and Dunn Index for both variables
+#Manhattan
+```{r}
+#evaulate DB index for all clusters
+#change method inside for loop and run for all five methods
+library(clusterSim)
+#nc - number_of_clusters
+min_nc=4
+max_nc=8
+res <- array(0, c(max_nc-min_nc+1, 2))
+res[,1] <- min_nc:max_nc
+clusters <- NULL
+for (nc in min_nc:max_nc)
+{
+hc <- hclust(xbothdist_man, method= "ward.D2")
+cl2 <- cutree(hc, k=nc)
+res[nc-min_nc+1, 2] <- DB <- index.DB(xbothdist_man, cl2, centrotypes="centroids")$DB
+print(paste("DB index for k = ",nc," is ",DB))
+print(paste("Dunn index for k = ",nc," is ",dunn(xbothdist_man,cl2)))
+clusters <- rbind(clusters, cl2)
+}
+print(paste("min DB for",(min_nc:max_nc)[which.min(res[,2])],"clusters=",min(res[,2])))
+print("clustering for min DB")
+print(clusters[which.min(res[,2]),])
+#write.table(res,file="DB_res.csv",sep=";",dec=",",row.names=TRUE,col.names=FALSE)
+plot(res, type="p", pch=0, xlab="Number of clusters", ylab="DB", xaxt="n")
+axis(1, c(min_nc:max_nc))
+```
+
+#End of Both variables combined - HCLUST
+
+#Agnes clustering
+```{r}
+library("cluster")
+set.seed(1234)
+#using agnes from the cluster package
+
+#euclidean
+HCE_ag_w <- agnes(xbothdist_euc, method = "ward")
+#single
+HCE_ag_s <- agnes(xbothdist_euc, method = "single")
+#complete
+HCE_ag_c <- agnes(xbothdist_euc, method = "complete")
+#average
+HCE_ag_a <- agnes(xbothdist_euc, method = "average")
+
+#check the agglomerative coeff given by agnes
+#ward method
+HCE_ag_w$ac
+#single method
+HCE_ag_s$ac
+#complete method
+HCE_ag_c$ac
+#average method
+HCE_ag_a$ac
+
+#ward has the best agglomerative coefficients
+
+#cutting tree based on clusters needed
+cut1_HCE_ag_w <- cutree(HCE_ag_w, k = 4)
+table(cut1_HCE_ag_w)
+DB <- index.DB(xbothdist_euc, cut1_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",4," is ",DB))
+print(paste("Dunn index for k = ",4," is ",dunn(xbothdist_euc,cut1_HCE_ag_w)))
+
+cut2_HCE_ag_w <- cutree(HCE_ag_w, k = 5)
+table(cut2_HCE_ag_w)
+DB <- index.DB(xbothdist_euc, cut2_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",5," is ",DB))
+print(paste("Dunn index for k = ",5," is ",dunn(xbothdist_euc,cut2_HCE_ag_w)))
+
+cut3_HCE_ag_w <- cutree(HCE_ag_w, k = 6)
+table(cut3_HCE_ag_w)
+DB <- index.DB(xbothdist_euc, cut3_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",6," is ",DB))
+print(paste("Dunn index for k = ",6," is ",dunn(xbothdist_euc,cut3_HCE_ag_w)))
+
+cut4_HCE_ag_w <- cutree(HCE_ag_w , k = 7)
+table(cut4_HCE_ag_w)
+DB <- index.DB(xbothdist_euc, cut4_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",7," is ",DB))
+print(paste("Dunn index for k = ",7," is ",dunn(xbothdist_euc,cut4_HCE_ag_w)))
+
+cut5_HCE_ag_w <- cutree(HCE_ag_w , k = 8)
+table(cut5_HCE_ag_w)
+DB <- index.DB(xbothdist_euc, cut5_HCE_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",8," is ",DB))
+print(paste("Dunn index for k = ",8," is ",dunn(xbothdist_euc,cut5_HCE_ag_w)))
+
+fviz_cluster(list(data=xboth,cluster=cut1_HCE_ag_w ), main="agnes-euclidean-ward cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HCE_ag_w ), main="agnes-euclidean-ward cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HCE_ag_w ), main="agnes-euclidean-ward cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HCE_ag_w ), main="agnes-euclidean-ward cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HCE_ag_w ), main="agnes-euclidean-ward cluster k=8")
+
+#manhattan
+HCM_ag_w <- agnes(xbothdist_man, method = "ward")
+#single
+HCM_ag_s <- agnes(xbothdist_man, method = "single")
+#complete
+HCM_ag_c <- agnes(xbothdist_man, method = "complete")
+#average
+HCM_ag_a <- agnes(xbothdist_man, method = "average")
+
+#check the agglomerative coeff given by agnes
+#ward method
+HCM_ag_w$ac
+#single method
+HCM_ag_s$ac
+#complete method
+HCM_ag_c$ac
+#average method
+HCM_ag_a$ac
+
+#ward has the best agglomerative coefficient
+#cutting tree based on clusters needed
+cut1_HCM_ag_w <- cutree(HCM_ag_w, k = 4)
+table(cut1_HCM_ag_w)
+DB <- index.DB(xbothdist_man, cut1_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",4," is ",DB))
+print(paste("Dunn index for k = ",4," is ",dunn(xbothdist_man,cut1_HCM_ag_w)))
+
+cut2_HCM_ag_w <- cutree(HCM_ag_w, k = 5)
+table(cut2_HCM_ag_w)
+DB <- index.DB(xbothdist_man, cut2_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",5," is ",DB))
+print(paste("Dunn index for k = ",5," is ",dunn(xbothdist_man,cut2_HCM_ag_w)))
+
+cut3_HCM_ag_w <- cutree(HCM_ag_w, k = 6)
+table(cut3_HCM_ag_w)
+DB <- index.DB(xbothdist_man, cut3_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",6," is ",DB))
+print(paste("Dunn index for k = ",6," is ",dunn(xbothdist_man,cut3_HCM_ag_w)))
+
+
+cut4_HCM_ag_w <- cutree(HCM_ag_w, k = 7)
+table(cut4_HCM_ag_w)
+DB <- index.DB(xbothdist_man, cut4_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",7," is ",DB))
+print(paste("Dunn index for k = ",7," is ",dunn(xbothdist_man,cut4_HCM_ag_w)))
+
+cut5_HCM_ag_w <- cutree(HCM_ag_w, k = 8)
+table(cut5_HCM_ag_w)
+DB <- index.DB(xbothdist_man, cut5_HCM_ag_w, centrotypes="centroids")$DB
+print(paste("DB index for k = ",7," is ",DB))
+print(paste("Dunn index for k = ",7," is ",dunn(xbothdist_man,cut5_HCM_ag_w)))
+
+
+fviz_cluster(list(data=xboth,cluster=cut1_HCM_ag_w ), main="agnes-manhattan-ward cluster k=4")
+fviz_cluster(list(data=xboth,cluster=cut2_HCM_ag_w ), main="agnes-manhattan-ward cluster k=5")
+fviz_cluster(list(data=xboth,cluster=cut3_HCM_ag_w ), main="agnes-manhattan-ward cluster k=6")
+fviz_cluster(list(data=xboth,cluster=cut4_HCM_ag_w ), main="agnes-manhattan-ward cluster k=7")
+fviz_cluster(list(data=xboth,cluster=cut5_HCM_ag_w ), main="agnes-manhattan-ward cluster k=8")
+```
+#dendrogram for the best model
+```{r}
+fviz_dend(HCM_ag_w, k=6, color_labels_by_k = FALSE, rect=TRUE, main="Cluster Dendrogram for Both Variables")
+
+#circular dendogram
+fviz_dend(HCM_ag_w, k=6, color_labels_by_k = TRUE, type="circular", rect=TRUE, main="Cluster Dendrogram for Purchase Behavior")
+```
+
+# ####Answer 3 Density Based Scan 
+# ####Part 1: PURCHASE BEHAVIOR ##
+```{r}
+library(dbscan)
+library(factoextra)
+
+x<- bsd
+set.seed(1234)
+
+PURCHASE_BEHAVIOR <- c('No__of_Brands', 'Brand_Runs', 'Total_Volume', 'No__of__Trans', 'Value', 'Trans___Brand_Runs', 'Vol_Tran', 'Avg__Price', 'maxBr', 'Others_999')
+
+xpb<-x %>% select(PURCHASE_BEHAVIOR) %>% scale() 
+
+#Obtaining optimal eps value
+kNNdistplot(xpb, k=2)
+abline(h = 2, lty=2, col="red")
+
+# Density-based clustering
+d <- dbscan(xpb, eps = 2.0, minPts = 2)
+d
+fviz_cluster(d, data=xpb, geom="point")
+
+#add the cluster variable to the data and check the cluster descriptions in terms of broader set of variables
+
+x <- x %>% mutate(d1=d$cluster)
+
+z <- x %>% group_by(d1) %>% summarise_at(c(
+'SEC_1', 'SEC_2', 'SEC_3', 'SEC_4', 
+'HS', 
+'SEX_1', 'SEX_2', 
+'EDU_1', 'EDU_2', 'EDU_3to4', 'EDU_5', 'EDU_6to9', 
+'Affluence_Index',
+'AGE_1', 'AGE_2', 'AGE_3', 'AGE_4', 
+'CHILD_1', 'CHILD_2', 'CHILD_3', 'CHILD_4', 
+'maxBr', 
+'No__of_Brands', 
+'No__of__Trans', 
+'Brand_Runs', 
+'Total_Volume', 
+'Value', 
+'Trans___Brand_Runs'), mean) 
+
+write.csv(z, "Model 1.csv")
+
+```
+
+# ###Answer 3 Density Based Scan 
+# ###Part 2: BASIS OF PURCHASE ##
+```{r}
+library(dbscan)
+library(factoextra)
+
+x<- bsd
+set.seed(1234)
+
+BASIS_PURCHASE <- c('Pr_Cat_1','Pr_Cat_2','Pr_Cat_3','Pr_Cat_4','PropCat_5', 'PropCat_6', 'PropCat_7', 'PropCat_8','PropCat_14','Pur_Vol_No_Promo____', 'Pur_Vol_Promo_6__','Pur_Vol_Other_Promo__')
+
+xbp<-x %>% select(BASIS_PURCHASE) %>% scale() 
+
+#Obtaining optimal eps value
+kNNdistplot(xbp, k=2)
+abline(h = 2.0, lty=2, col="red")
+
+# Density-based clustering
+d <- dbscan(xbp, eps = 2.0, minPts = 2)
+d
+fviz_cluster(d, data=xbp, geom="point")
+
+#add the cluster variable to the data and check the cluster descriptions in terms of broader set of variables
+
+x <- x %>% mutate(d1=d$cluster)
+
+z <- x %>% group_by(d1) %>% summarise_at(c(
+'SEC_1', 'SEC_2', 'SEC_3', 'SEC_4', 
+'HS', 
+'SEX_1', 'SEX_2', 
+'EDU_1', 'EDU_2', 'EDU_3to4', 'EDU_5', 'EDU_6to9', 
+'Affluence_Index',
+'AGE_1', 'AGE_2', 'AGE_3', 'AGE_4', 
+'CHILD_1', 'CHILD_2', 'CHILD_3', 'CHILD_4', 
+'maxBr', 
+'No__of_Brands', 
+'No__of__Trans', 
+'Brand_Runs', 
+'Total_Volume', 
+'Value', 
+'Trans___Brand_Runs'), mean) 
+
+write.csv(z, "Model 1.csv")
+```
+
+# ###Answer 3 Density Based Scan 
+#Part 3: PURCHASE BEHAVIOR + BASIS OF PURCHASE ###
+```{r}
+library(dbscan)
+library(factoextra)
+
+x<- bsd
+set.seed(1234)
+
+BOTH <- c('Pr_Cat_1','Pr_Cat_2','Pr_Cat_3','Pr_Cat_4','PropCat_5', 'PropCat_6', 'PropCat_7', 'PropCat_8','PropCat_14','Pur_Vol_No_Promo____', 'Pur_Vol_Promo_6__','Pur_Vol_Other_Promo__','No__of_Brands', 'Brand_Runs', 'Total_Volume', 'No__of__Trans', 'Value', 'Trans___Brand_Runs', 'Vol_Tran', 'Avg__Price', 'maxBr', 'Others_999')
+
+xb<-x %>% select(BOTH) %>% scale() 
+
+#Obtaining optimal eps value
+kNNdistplot(xb, k=4)
+abline(h = 3.0, lty=2, col="red")
+
+# Density-based clustering
+d <- dbscan(xb, eps = 4.0, minPts = 2)
+d
+fviz_cluster(d, data=xb, geom="point")
+
+#add the cluster variable to the data and check the cluster descriptions in terms of broader set of variables
+
+x <- x %>% mutate(d1=d$cluster)
+
+z <- x %>% group_by(d1) %>% summarise_at(c(
+'SEC_1', 'SEC_2', 'SEC_3', 'SEC_4', 
+'HS', 
+'SEX_1', 'SEX_2', 
+'EDU_1', 'EDU_2', 'EDU_3to4', 'EDU_5', 'EDU_6to9', 
+'Affluence_Index',
+'AGE_1', 'AGE_2', 'AGE_3', 'AGE_4', 
+'CHILD_1', 'CHILD_2', 'CHILD_3', 'CHILD_4', 
+'maxBr', 
+'No__of_Brands', 
+'No__of__Trans', 
+'Brand_Runs', 
+'Total_Volume', 
+'Value', 
+'Trans___Brand_Runs'), mean) 
+
+write.csv(z, "Model 1.csv")
+```
+
+##Answer 3 - K Mediods Clustering###
+
+# K medoids for all 3 variable list for best value of K
+
+#purchase behaviour
+
+```{r}
+
+##PAM - Partitioning around mediods
+install.packages("cluster")
+library(cluster)
+set.seed(1234)
+
+#a. purchase behaviour
+#Model 1 k=2, euclidean
+pam_pb1<-pam(xpb, k=2, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_pb1$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_pb1)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_pb1)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+d <- dist(xpb)
+
+print(index.DB(xpb, pam_pb1$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_pb1$cluster, Data=xpb))
+
+
+# Model 2 k=2, manhattan
+pam_pb2<-pam(xpb, k=2, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_pb2$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_pb2)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_pb2)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xpb, pam_pb2$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_pb2$cluster, Data=xpb))
+
+
+#Model 3 k=3 euclidean
+pam_pb3<-pam(xpb, k=3, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_pb3$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_pb3)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_pb3)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xpb, pam_pb3$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_pb3$cluster, Data=xpb))
+
+
+
+# Model 4 k=3, manhattan - best model
+pam_pb4<-pam(xpb, k=3, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_pb4$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_pb4)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_pb4)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xpb, pam_pb4$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_pb4$cluster, Data=xpb))
+
+
+#Model 5 k=4, euclidean
+pam_pb5<-pam(xpb, k=4, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_pb5$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_pb5)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_pb5)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xpb, pam_pb5$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_pb5$cluster, Data=xpb))
+
+
+# Model 6 k=4, manhattan
+pam_pb6<-pam(xpb, k=4, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_pb6$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_pb6)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_pb6)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xpb, pam_pb6$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_pb6$cluster, Data=xpb))
+
+```
+
+
+#b. K medoids for basis for purchase
+
+```{r}
+
+##PAM - Partitioning around mediods
+
+set.seed(1234)
+
+#a. purchase behaviour
+#Model 1 k=2, euclidean
+pam_bfp1<-pam(xbfp, k=2, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_bfp1$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_bfp1)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_bfp1)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+d <- dist(xbfp)
+
+print(index.DB(xbfp, pam_bfp1$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_bfp1$cluster, Data=xbfp))
+
+# Model 2 k=2, manhattan
+pam_bfp2<-pam(xbfp, k=2, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_bfp2$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_bfp2)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_bfp2)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xbfp, pam_bfp2$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_bfp2$cluster, Data=xbfp))
+
+
+#Model 3 k=3 euclidean
+pam_bfp3<-pam(xbfp, k=3, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_bfp3$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_bfp3)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_bfp3)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xbfp, pam_bfp3$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_bfp3$cluster, Data=xbfp))
+
+# Model 4 k=3, manhattan - best
+pam_bfp4<-pam(xbfp, k=3, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_bfp4$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_bfp4)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_bfp4)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xbfp, pam_bfp4$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_bfp4$cluster, Data=xbfp))
+
+
+#Model 5 k=4, euclidean
+pam_bfp5<-pam(xbfp, k=4, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_bfp5$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_bfp5)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_bfp5)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xbfp, pam_bfp5$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_bfp5$cluster, Data=xbfp))
+
+# Model 6 k=4, manhattan
+pam_bfp6<-pam(xbfp, k=4, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_bfp6$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_bfp6)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_bfp6)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xbfp, pam_bfp6$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_bfp6$cluster, Data=xbfp))
+
+```
+
+
+#b. K medoids for purchase behaviour and basis for purchase
+
+```{r}
+
+#c. purchase behaviour and basis for purchase
+#Model 1 k=4, euclidean
+pam_both1<-pam(xboth, k=4, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_both1$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_both1)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_both1)
+summary(si)
+plot(si, col=1:6, border=NA)
+
+d <- dist(xboth)
+
+print(index.DB(xboth, pam_both1$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_both1$cluster, Data=xboth))
+
+# Model 2 k=4, manhattan
+pam_both2<-pam(xboth, k=4, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_both2$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_both2)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_both2)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xboth, pam_both2$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_both2$cluster, Data=xboth))
+
+
+#Model 3 k=5, euclidean
+pam_both3<-pam(xboth, k=5, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_both3$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_both3)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_both3)
+summary(si)
+plot(si, col=1:6, border=NA)
+
+print(index.DB(xboth, pam_both3$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_both3$cluster, Data=xboth))
+
+# Model 4 k=5, manhattan
+pam_both4<-pam(xboth, k=5, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_both4$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_both4)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_both4)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xboth, pam_both4$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_both4$cluster, Data=xboth))
+
+
+#Model 5 k=6, euclidean
+pam_both5<-pam(xboth, k=6, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_both5$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_both5)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_both5)
+summary(si)
+plot(si, col=1:6, border=NA)
+
+print(index.DB(xboth, pam_both5$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_both5$cluster, Data=xboth))
+
+# Model 6 k=6, manhattan - best
+pam_both6<-pam(xboth, k=6, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_both6$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_both6)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_both6)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xboth, pam_both6$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_both6$cluster, Data=xboth))
+
+
+#Model 7 k=7, euclidean
+pam_both7<-pam(xboth, k=7, metric = "euclidean")
+
+#Partitioning Around Mediods
+pam_both7$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_both7)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_both7)
+summary(si)
+plot(si, col=1:6, border=NA)
+
+print(index.DB(xboth, pam_both7$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_both7$cluster, Data=xboth))
+
+# Model 8 k=7, manhattan
+pam_both8<-pam(xboth, k=7, metric = "manhattan")
+
+#Partitioning Around Mediods
+pam_both8$clusinfo
+
+#plot of clusters
+fviz_cluster(pam_both8)
+
+#silhoutte plot - using the silhoutte function in the cluster package
+si <- silhouette(pam_both8)
+summary(si)
+plot(si, col=1:3, border=NA)
+
+print(index.DB(xboth, pam_both8$cluster,d,centrotypes="medoids"))
+print(dunn(clusters = pam_both8$cluster, Data=xboth))
+
+
+```
+####Answer 4 - Decision Tree##
+#4c
+#decision tree - rpart on bsd data
+
+```{r}
+
+x<- bsd
+set.seed(1234)
+
+#clustering on  purchase behavior varables
+PURCHASE_BEHAVIOR <- c('No__of_Brands', 'Brand_Runs', 'Total_Volume', 'No__of__Trans', 'Value', 'Trans___Brand_Runs', 'Vol_Tran', 'Avg__Price', 'maxBr', 'Others_999')
+
+xpb<-x %>% select(PURCHASE_BEHAVIOR) %>% scale() 
+
+#kmeans model
+kmClus_pb<- xpb %>%kmeans(centers=4, nstart=25)
+kmClus_pb
+
+#Final dataset with cluster no. of best model
+
+#add the cluster variable to the data and check the cluster descriptions in terms of broader set of variables
+bsd <- bsd %>% mutate(clusKM=kmClus_pb$cluster)
+
+bsd %>% group_by(clusKM) %>% summarise_at(c('HS','CS', 'Affluence_Index', 'CHILD_1', 'CHILD_2', 'CHILD_3', 'CHILD_4', 'maxBr', 'No__of_Brands', 'No__of__Trans', 'Brand_Runs', 'Total_Volume', 'Value', 'Trans___Brand_Runs'), mean) %>% view()
+
+#It can be useful to convert the target variable, loan_status to  a factor variable
+bsd$clusKM <- as.factor(bsd$clusKM)
+
+str(bsd)
+
+#Decision tree model
+library(rpart)
+library(rpart.plot)
+
+#to get same results each time we run decision tree
+set.seed(1234)
+
+#split the data into trn, tst subsets
+#70:30 split
+nr<-nrow(bsd)
+trnIndex<- sample(1:nr, size = round(0.7*nr), replace=FALSE)
+bsdTrn <- bsd[trnIndex, ]
+bsdTst <- bsd[-trnIndex, ]
+
+bsdT1 <- rpart(clusKM ~ ., data=bsdTrn, method="class",parms = list(split = "gini"), control = rpart.control(cp=0.01,minsplit = 5 , maxdepth =10))
+
+printcp(bsdT1)
+plotcp(bsdT1)
+rpart.plot(bsdT1)
+
+predTrn=predict(bsdT1,bsdTrn, type='class')
+#confusion matrix for train
+xtrain = table(predTrn, bsdTrn$clusKM)
+xtrain
+#accuracy on training data
+mean(predTrn == bsdTrn$clusKM)
+
+predTst=predict(bsdT1,bsdTst, type='class')
+
+#accuracy
+mean(predTst == bsdTst$clusKM)
+
+xtab = table(predTst, bsdTst$clusKM)
+xtab
+
+```
+
+```{r}
+
+bsd <- bsd %>% select(-c(clusKM))
+x<- bsd
+#Create a scaled dataset for clustering, and use this
+xpb <- bsd %>% select(PURCHASE_BEHAVIOR) %>% scale()
+xbfp <- bsd %>% select(BASIS_FOR_PURCHASE) %>% scale()
+xboth<- bsd %>% select(PURCHASE_BEHAVIOR, BASIS_FOR_PURCHASE) %>% scale() 
+
+# Perform k-means clustering on a data matrix
+class(xboth)
+#to get same results each time we run decision tree
+set.seed(1234)
+#k=6 - best
+kmClus_both5 <- kmeans(xboth, centers=6, nstart=25, iter.max = 20)
+
+#add the cluster variable to the data and check the cluster descriptions in terms of broader set of variables
+bsd <- bsd %>% mutate(clusKM=kmClus_both5$cluster)
+
+bsd %>% group_by(clusKM) %>% summarise_at(c('HS','CS', 'Affluence_Index', 'CHILD_1', 'CHILD_2', 'CHILD_3', 'CHILD_4', 'maxBr', 'No__of_Brands', 'No__of__Trans', 'Brand_Runs', 'Total_Volume', 'Value', 'Trans___Brand_Runs'), mean) %>% view()
+
+bsd$clusKM <- as.factor(bsd$clusKM)
+
+str(bsd)
+
+#Decision tree model
+library(rpart)
+library(rpart.plot)
+
+#to get same results each time we run decision tree
+set.seed(1234)
+
+#split the data into trn, tst subsets
+#70:30 split
+nr<-nrow(bsd)
+trnIndex<- sample(1:nr, size = round(0.7*nr), replace=FALSE)
+bsdTrn <- bsd[trnIndex, ]
+bsdTst <- bsd[-trnIndex, ]
+
+bsdT1 <- rpart(clusKM ~ ., data=bsdTrn, method="class",parms = list(split = "gini"), control = rpart.control(cp=0.01,minsplit = 5 , maxdepth =10))
+
+printcp(bsdT1)
+plotcp(bsdT1)
+rpart.plot(bsdT1)
+
+predTrn=predict(bsdT1,bsdTrn, type='class')
+
+#accuracy on training data
+mean(predTrn == bsdTrn$clusKM)
+
+#confusion matrix for train
+xtrain = table(predTrn, bsdTrn$clusKM)
+xtrain
+
+predTst=predict(bsdT1,bsdTst, type='class')
+
+#accuracy
+mean(predTst == bsdTst$clusKM)
+
+#confusion matrix for test
+xtab = table(predTst, bsdTst$clusKM)
+xtab
+```
+
